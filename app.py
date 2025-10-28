@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 import pandas as pd
-import time
 
 st.title("OTPYRC")
 st.markdown("OTPYRC fetches live crypto prices using the CoinGecko API.")
@@ -11,19 +10,11 @@ coins = st.sidebar.text_input("Enter Coin IDs (comma separated):", value="bitcoi
 currencies = st.sidebar.text_input("Enter Currencies (comma separated):", value="usd,inr,eur")
 
 #--------------------------------------------------------
-# NEW FEATURE 1: AUTO-REFRESH TOGGLE
-# This checkbox lets users turn on/off automatic page refresh every 60 seconds
+# REFRESH BUTTON - Simple one-click refresh
 #--------------------------------------------------------
 st.sidebar.markdown("---")
-auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh (60s)", value=False)
-
-if auto_refresh:
-    # Display countdown timer
-    placeholder = st.sidebar.empty()
-    for i in range(60, 0, -1):
-        placeholder.write(f"⏱️ Refreshing in {i}s")
-        time.sleep(1)
-    st.rerun()  # Triggers page refresh after 60 seconds
+if st.sidebar.button("🔄 Refresh Data"):
+    st.rerun()  # Just refreshes the page when clicked
 
 #--------------------------------------------------------
 # ORIGINAL API CALL - Simple Price Data
@@ -39,29 +30,26 @@ stored = {
 response = requests.get(url, params=stored)
 
 #--------------------------------------------------------
-# NEW FEATURE 2: SPARKLINE DATA (7-day mini charts)
-# This is a DIFFERENT API endpoint that gives us historical price data for charts
+# SPARKLINE DATA (7-day mini charts)
 #--------------------------------------------------------
 sparkline_url = "https://api.coingecko.com/api/v3/coins/markets"
 sparkline_params = {
-    "vs_currency": "usd",  # Sparklines only work with one currency at a time
+    "vs_currency": "usd",
     "ids": coins,
-    "sparkline": "true"  # This tells API to include 7-day price history
+    "sparkline": "true"
 }
 spark_response = requests.get(sparkline_url, params=sparkline_params)
 
-# Store sparkline data in a dictionary for easy lookup later
-# Format: {"bitcoin": [price1, price2, ...], "ethereum": [price1, price2, ...]}
+# Store sparkline data in dictionary
 sparkline_data = {}
 if spark_response.status_code == 200:
     spark_json = spark_response.json()
     for coin_data in spark_json:
         coin_id = coin_data["id"]
-        # sparkline_in_7d is a nested dictionary with "price" key containing list of prices
         sparkline_data[coin_id] = coin_data["sparkline_in_7d"]["price"]
 
 #--------------------------------------------------------
-# PROCESS MAIN PRICE DATA (same as before)
+# PROCESS MAIN PRICE DATA
 #--------------------------------------------------------
 if response.status_code == 200:
     data = response.json()
@@ -118,27 +106,26 @@ if response.status_code == 200:
         st.warning("Selected currency not found in data.")
 
     #--------------------------------------------------------
-    # NEW FEATURE 3: SPARKLINE CHARTS DISPLAY
-    # Show mini 7-day trend chart for each coin
+    # SPARKLINE CHARTS - Clean line charts showing 7-day trend
     #--------------------------------------------------------
-    st.write("### 7-Day Price Trends")
+    st.write("### 📈 7-Day Price Trends")
     
-    # Loop through each coin and display its sparkline chart
-    for coin in coins.split(','):
-        coin = coin.strip().lower()
+    coin_list = [c.strip().lower() for c in coins.split(',')]
+    cols = st.columns(len(coin_list))
+    
+    for idx, coin in enumerate(coin_list):
         if coin in sparkline_data:
-            st.write(f"**{coin.title()}**")  # Display coin name as title
-            
-            # Create a DataFrame from the price list for charting
-            # sparkline_data[coin] is a list of ~168 prices (7 days × 24 hours)
-            spark_df = pd.DataFrame(sparkline_data[coin], columns=["Price"])
-            
-            # st.line_chart() creates a smooth line chart
-            st.line_chart(spark_df, height=150)  # height=150 keeps it compact
+            with cols[idx]:
+                st.markdown(f"**{coin.upper()}**")
+                
+                prices = sparkline_data[coin]
+                spark_df = pd.DataFrame(prices, columns=['Price'])
+                
+                st.line_chart(spark_df, height=180, use_container_width=True)
 
     # Original bar chart for current prices
     if price_col in flipped_df.columns:
-        st.write("### Price Chart")
+        st.write("### Current Price Comparison")
         st.bar_chart(flipped_df[price_col])
     else:
         st.warning("Selected currency not found in data.")
