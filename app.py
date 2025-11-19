@@ -1,89 +1,264 @@
-💰 OTPYRC: Live Cryptocurrency Price Tracker
+import streamlit as st
 
-OTPYRC (Crypto spelled backward) is a simple, fast, and real-time dashboard built with Streamlit that uses the CoinGecko API to fetch and visualize live cryptocurrency prices, daily changes, and 7-day trends.
+import requests
 
-It's designed to give you a quick, clean overview of your selected digital assets.
-
-✨ Features
-
-Real-Time Data: Fetches up-to-the-minute prices using the CoinGecko API.
-
-Customizable Tracking: Easily select which Coins (e.g., bitcoin, ethereum) and Currencies (e.g., usd, eur) you want to monitor using the sidebar controls.
-
-7-Day Trends: Includes sparkline charts for each coin, showing its price movement over the last week.
-
-24-Hour Metrics: Displays the percentage change in price over the last 24 hours, color-coded for quick visual analysis (Green for up, Red for down).
-
-Interactive Charts: Includes bar charts for easy comparison of current prices across selected coins.
-
-🛠️ Installation and Setup
-
-To run OTPYRC locally, you need Python installed on your system.
-
-1. Clone the repository (Simulated Step)
-
-Since this is a single file, you would typically save the provided Python code as a file named otpyrc_app.py.
-
-2. Install Dependencies
-
-You only need two main libraries: streamlit and pandas. The requests library is usually included with Python environments.
-
-pip install streamlit pandas
+import pandas as pd
 
 
-3. Run the App
 
-Execute the Streamlit app from your terminal:
+st.title("OTPYRC")
 
-streamlit run otpyrc_app.py
+st.markdown("OTPYRC fetches live crypto prices using the CoinGecko API.")
 
 
-The application will automatically open in your web browser, usually at http://localhost:8501.
 
-🚀 How to Use
+st.sidebar.header("🔧 Controls")
 
-All the core settings for the tracker are located in the Controls section of the sidebar on the left.
+coins = st.sidebar.text_input("Enter Coin IDs (comma separated):", value="bitcoin,ethereum,dogecoin")
 
-1. Configure Coins and Currencies
+currencies = st.sidebar.text_input("Enter Currencies (comma separated):", value="usd,inr,eur")
 
-In the sidebar, you will see two input fields:
 
-Control Field
 
-Description
+#--------------------------------------------------------
 
-Default Value
+# REFRESH BUTTON - Simple one-click refresh
 
-Enter Coin IDs
+#--------------------------------------------------------
 
-The official CoinGecko ID for the cryptocurrency. Separate multiple coins with a comma.
+st.sidebar.markdown("---")
 
-bitcoin,ethereum,dogecoin
+if st.sidebar.button("🔄 Refresh Data"):
 
-Enter Currencies
+st.rerun() # Just refreshes the page when clicked
 
-The fiat currency codes (or other crypto codes) for comparison. Separate multiple currencies with a comma.
 
-usd,inr,eur
 
-Example: To track Cardano, Polygon, and Solana against the Japanese Yen and British Pound, you would enter:
+#--------------------------------------------------------
 
-Coin IDs: cardano,matic-network,solana
+# ORIGINAL API CALL - Simple Price Data
 
-Currencies: jpy,gbp
+#--------------------------------------------------------
 
-2. Refresh Data
+url = "https://api.coingecko.com/api/v3/simple/price"
 
-The CoinGecko API is very fast, but if you want to force an immediate update of all prices, just click the 🔄 Refresh Data button in the sidebar.
+stored = {
 
-3. Analyze the Visualizations
+"ids": coins,
 
-Current Prices Table: Shows the raw data, including price, 24-hour change, and the last update timestamp for every coin and currency combination you selected.
+"vs_currencies": currencies,
 
-Select currency to visualize: Use the dropdown menu to select one currency (e.g., usd) to focus the charts and change metrics on.
+"include_24hr_change": "true",
 
-Change Metrics: A table that clearly shows the current price and the color-coded 24hr change percentage.
+"include_last_updated_at": "true"
 
-📈 7-Day Price Trends: A row of clean line charts (sparklines) showing the price movement over the past seven days for each selected coin.
+}
 
-Current Price Comparison: A simple bar chart comparing the latest price of your selected coins against the primary currency you chose in the selector.
+
+
+response = requests.get(url, params=stored)
+
+
+
+#--------------------------------------------------------
+
+# SPARKLINE DATA (7-day mini charts)
+
+#--------------------------------------------------------
+
+sparkline_url = "https://api.coingecko.com/api/v3/coins/markets"
+
+sparkline_params = {
+
+"vs_currency": "usd",
+
+"ids": coins,
+
+"sparkline": "true"
+
+}
+
+spark_response = requests.get(sparkline_url, params=sparkline_params)
+
+
+
+# Store sparkline data in dictionary
+
+sparkline_data = {}
+
+if spark_response.status_code == 200:
+
+spark_json = spark_response.json()
+
+for coin_data in spark_json:
+
+coin_id = coin_data["id"]
+
+sparkline_data[coin_id] = coin_data["sparkline_in_7d"]["price"]
+
+
+
+#--------------------------------------------------------
+
+# PROCESS MAIN PRICE DATA
+
+#--------------------------------------------------------
+
+if response.status_code == 200:
+
+data = response.json()
+
+df = pd.DataFrame(data)
+
+flipped_df = df.T
+
+
+
+# Filter to show only price columns
+
+what_i_want_to_show = []
+
+for col in flipped_df.columns:
+
+if not col.endswith("_24h_change") and not col.endswith("last_updated_at"):
+
+what_i_want_to_show.append(col)
+
+
+
+st.write("### Current Prices Table")
+
+st.dataframe(flipped_df[what_i_want_to_show])
+
+
+
+# Build currency list for selector
+
+currency_list = []
+
+for i in currencies.split(','):
+
+currency_list.append(i.strip().lower())
+
+
+
+selected_currency = st.selectbox("Select currency to visualize:", currency_list)
+
+
+
+price_col = selected_currency
+
+change_col = selected_currency + "_24h_change"
+
+
+
+if change_col not in flipped_df.columns:
+
+flipped_df[change_col] = pd.NA
+
+
+
+if price_col in flipped_df.columns:
+
+clean_df = flipped_df[[price_col, change_col]].copy()
+
+clean_df[price_col] = pd.to_numeric(clean_df[price_col], errors="coerce")
+
+clean_df[change_col] = pd.to_numeric(clean_df[change_col], errors="coerce")
+
+
+
+clean_df = clean_df.rename(columns={
+
+price_col: "Price",
+
+change_col: "24hr change"
+
+})
+
+
+
+# Format 24hr change with colors
+
+for i in range(len(clean_df)):
+
+value = clean_df["24hr change"].iloc[i]
+
+if pd.notna(value):
+
+if value >= 0:
+
+clean_df["24hr change"].iloc[i] = f"<span style='color:green;font-weight:bold'>+{round(value, 2)}%</span>"
+
+else:
+
+clean_df["24hr change"].iloc[i] = f"<span style='color:red;font-weight:bold'>{round(value, 2)}%</span>"
+
+else:
+
+clean_df["24hr change"].iloc[i] = "N/A"
+
+
+
+st.write("### Change Metrics")
+
+clean_df = clean_df.reset_index().rename(columns={'index': 'coin'})
+
+st.markdown(clean_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+
+else:
+
+st.warning("Selected currency not found in data.")
+
+
+
+#--------------------------------------------------------
+
+# SPARKLINE CHARTS - Clean line charts showing 7-day trend
+
+#--------------------------------------------------------
+
+st.write("### 📈 7-Day Price Trends")
+
+
+coin_list = [c.strip().lower() for c in coins.split(',')]
+
+cols = st.columns(len(coin_list))
+
+
+for idx, coin in enumerate(coin_list):
+
+if coin in sparkline_data:
+
+with cols[idx]:
+
+st.markdown(f"**{coin.upper()}**")
+
+
+prices = sparkline_data[coin]
+
+spark_df = pd.DataFrame(prices, columns=['Price'])
+
+
+st.line_chart(spark_df, height=180, use_container_width=True)
+
+
+
+# Original bar chart for current prices
+
+if price_col in flipped_df.columns:
+
+st.write("### Current Price Comparison")
+
+st.bar_chart(flipped_df[price_col])
+
+else:
+
+st.warning("Selected currency not found in data.")
+
+
+
+else:
+
+st.write("Error", response.status_code)
+
