@@ -2,48 +2,108 @@
 OTPYRC - Live Crypto Price Tracker
 ====================================
 Uses the FREE CoinGecko API (no API key needed).
-Fetches live prices, 24hr change %, and 7-day sparkline charts.
+
+FIX FOR 429 (Rate Limit):
+    - API responses are now CACHED for 60 seconds using @st.cache_data
+    - This means Streamlit won't call CoinGecko again on every dropdown click/rerun
+    - Only a manual "Refresh" or waiting 60s triggers a new API call
+    - Added retry logic with exponential backoff as a safety net
 
 HOW TO RUN:
     pip install streamlit requests pandas
     streamlit run app.py
 
-FUTURE REF / REMINDERS:
-    - CoinGecko free tier has rate limits (~10-30 calls/min). Don't spam refresh.
-    - Coin IDs must match CoinGecko slugs: e.g. "bitcoin", "ethereum", NOT "BTC"
-      → Find valid IDs at: https://api.coingecko.com/api/v3/coins/list
-    - Sparkline data is always in USD from CoinGecko (limitation of their free API)
-    - If you get a 429 error, you've hit the rate limit. Wait ~60 seconds.
-    - st.rerun() replaced the old st.experimental_rerun() in newer Streamlit versions.
-      If it breaks, try: import streamlit as st; st.experimental_rerun()
-    - iloc-based assignment on a copy of a df gives SettingWithCopyWarning.
-      Using .loc[] is the proper fix (already done below).
+REMINDERS:
+    - CoinGecko free tier = ~10-30 calls/min. Cache TTL (60s) keeps you safe.
+    - Coin IDs must be CoinGecko slugs: "bitcoin", "ethereum", NOT "BTC"
+      -> Valid IDs: https://api.coingecko.com/api/v3/coins/list
+    - Sparkline is always in USD on the free tier (CoinGecko limitation)
+    - If you STILL get 429s, increase CACHE_TTL_SECONDS to 120 or 180
+    - If you have a CoinGecko API key, add it as: headers={"x-cg-demo-api-key": "YOUR_KEY"}
 """
 
+import time
 import streamlit as st
 import requests
 import pandas as pd
 
 # ─────────────────────────────────────────────
-# PAGE CONFIG
+# CONFIG — tweak these if you keep hitting 429
+# ─────────────────────────────────────────────
+CACHE_TTL_SECONDS = 60   # How long to reuse cached data before calling API again
+MAX_RETRIES = 3           # How many times to retry on 429 before giving up
+RETRY_DELAY = 5           # Seconds to wait between retries
+
+# ─────────────────────────────────────────────
+# CACHED API FUNCTIONS
+# @st.cache_data(ttl=60) means:
+#   - First call -> hits the API, stores result
+#   - Next calls within 60s -> returns stored result, NO new API call
+#   - After 60s -> fetches fresh data again
+# This is the main fix for 429 errors.
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Fetching live prices...")
+def fetch_prices(coins: str, currencies: str):
+    """Fetch current prices + 24hr change from CoinGecko /simple/price"""
+    url = "https://api.coingecko.com/api/v3/simple/price"
+    params = {
+        "ids": coins,
+        "vs_currencies": currencies,
+        "include_24hr_change": "true",
+        "include_last_updated_at": "true"
+    }
+    for attempt in range(MAX_RETRIES):
+        resp = requests.get(url, params=params)
+        if resp.status_code == 200:
+            return resp.json(), None
+        elif resp.status_code == 429:
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAY * (attempt + 1))  # wait 5s, 10s, 15s...
+            else:
+                return None, 429
+        else:
+            return None, resp.status_code
+    return None, 429
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Fetching 7-day trends...")
+def fetch_sparklines(coins: str):
+    """Fetch 7-day sparkline price arrays from CoinGecko /coins/markets"""
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+    params = {
+        "vs_currency": "usd",
+        "ids": coins,
+        "sparkline": "true"
+    }
+    for attempt in range(MAX_RETRIES):
+        resp = requests.get(url, params=params)
+        if resp.status_code == 200:
+            result = {}
+            for coin_data in resp.json():
+                result[coin_data["id"]] = coin_data["sparkline_in_7d"]["price"]
+            return result, None
+        elif resp.status_code == 429:
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAY * (attempt + 1))
+            else:
+                return {}, 429
+        else:
+            return {}, resp.status_code
+    return {}, 429
+
+
+# ─────────────────────────────────────────────
+# UI
 # ─────────────────────────────────────────────
 st.title("OTPYRC")
 st.markdown("OTPYRC fetches live crypto prices using the CoinGecko API.")
 
-# ─────────────────────────────────────────────
-# SIDEBAR CONTROLS
-# ─────────────────────────────────────────────
 st.sidebar.header("🔧 Controls")
-
-# REMINDER: Coin IDs are CoinGecko slugs (lowercase, hyphenated for multi-word coins)
-# e.g. "shiba-inu", "avalanche-2", "matic-network"
 coins = st.sidebar.text_input(
     "Enter Coin IDs (comma separated):",
     value="bitcoin,ethereum,dogecoin"
 )
-
-# REMINDER: Currency codes are standard ISO codes in lowercase
-# e.g. "usd", "inr", "eur", "gbp", "jpy"
 currencies = st.sidebar.text_input(
     "Enter Currencies (comma separated):",
     value="usd,inr,eur"
@@ -51,129 +111,87 @@ currencies = st.sidebar.text_input(
 
 st.sidebar.markdown("---")
 
-# ─────────────────────────────────────────────
-# REFRESH BUTTON
-# FIX: The original code had no indented body inside the if-block.
-# Python requires at least one statement inside every if/else/for/while block.
-# st.rerun() was there but NOT indented, so Python threw IndentationError.
-# ─────────────────────────────────────────────
+# Refresh button: clears the cache so next run fetches fresh data
 if st.sidebar.button("🔄 Refresh Data"):
-    st.rerun()  # Reruns the entire script from top = acts as a manual refresh
+    st.cache_data.clear()  # wipe cached responses so API is called again
+    st.rerun()
+
+st.sidebar.info(f"💡 Data auto-refreshes every {CACHE_TTL_SECONDS}s to avoid rate limits.")
 
 # ─────────────────────────────────────────────
-# API CALL 1 — LIVE PRICES
-# Endpoint: /simple/price
-# Returns: current price + 24hr change % for each coin/currency pair
+# FETCH DATA
 # ─────────────────────────────────────────────
-url = "https://api.coingecko.com/api/v3/simple/price"
-params = {
-    "ids": coins,
-    "vs_currencies": currencies,
-    "include_24hr_change": "true",
-    "include_last_updated_at": "true"
+price_data, price_err = fetch_prices(coins, currencies)
+sparkline_data, spark_err = fetch_sparklines(coins)
+
+# Friendly error messages for each HTTP error code
+ERROR_MESSAGES = {
+    429: "⛔ Rate limited by CoinGecko (429). Wait ~60 seconds and click Refresh.",
+    400: "❌ Bad request (400) — check your coin IDs are valid CoinGecko slugs.",
+    500: "🔥 CoinGecko server error (500) — their end, not yours. Try again later.",
 }
-response = requests.get(url, params=params)
+
+if price_err:
+    msg = ERROR_MESSAGES.get(price_err, f"API Error {price_err} — try again later.")
+    st.error(msg)
+    st.stop()  # halt the rest of the script, nothing to show
 
 # ─────────────────────────────────────────────
-# API CALL 2 — SPARKLINE DATA (7-day mini charts)
-# Endpoint: /coins/markets
-# Returns: array of hourly prices for last 7 days per coin (always in USD)
-# REMINDER: sparkline is always USD on free tier — can't change this currency
+# PROCESS PRICES
 # ─────────────────────────────────────────────
-sparkline_url = "https://api.coingecko.com/api/v3/coins/markets"
-sparkline_params = {
-    "vs_currency": "usd",
-    "ids": coins,
-    "sparkline": "true"
-}
-spark_response = requests.get(sparkline_url, params=sparkline_params)
+df = pd.DataFrame(price_data).T   # transpose: rows=coins, cols=price keys
 
-# Parse sparkline into a dict: { "bitcoin": [price1, price2, ...], ... }
-sparkline_data = {}
-if spark_response.status_code == 200:
-    for coin_data in spark_response.json():
-        coin_id = coin_data["id"]
-        sparkline_data[coin_id] = coin_data["sparkline_in_7d"]["price"]
+price_cols_only = [
+    col for col in df.columns
+    if not col.endswith("_24h_change") and not col.endswith("last_updated_at")
+]
+
+st.write("### Current Prices Table")
+st.dataframe(df[price_cols_only])
+
+currency_list = [c.strip().lower() for c in currencies.split(",")]
+selected_currency = st.selectbox("Select currency to visualize:", currency_list)
+
+price_col = selected_currency
+change_col = selected_currency + "_24h_change"
+
+if change_col not in df.columns:
+    df[change_col] = pd.NA
+
+if price_col in df.columns:
+    clean_df = df[[price_col, change_col]].copy()
+    clean_df[price_col] = pd.to_numeric(clean_df[price_col], errors="coerce")
+    clean_df[change_col] = pd.to_numeric(clean_df[change_col], errors="coerce")
+    clean_df = clean_df.rename(columns={price_col: "Price", change_col: "24hr change"})
+
+    for coin_name in clean_df.index:
+        value = clean_df.loc[coin_name, "24hr change"]
+        if pd.notna(value):
+            rounded = round(float(value), 2)
+            color = "green" if rounded >= 0 else "red"
+            sign = "+" if rounded >= 0 else ""
+            clean_df.loc[coin_name, "24hr change"] = (
+                f"<span style='color:{color};font-weight:bold'>{sign}{rounded}%</span>"
+            )
+        else:
+            clean_df.loc[coin_name, "24hr change"] = "N/A"
+
+    st.write("### Change Metrics")
+    clean_df = clean_df.reset_index().rename(columns={"index": "coin"})
+    st.markdown(clean_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+else:
+    st.warning("Selected currency not found in data.")
 
 # ─────────────────────────────────────────────
-# PROCESS & DISPLAY MAIN PRICE DATA
+# SPARKLINE CHARTS
 # ─────────────────────────────────────────────
-if response.status_code == 200:
-    data = response.json()
+st.write("### 📈 7-Day Price Trends (USD)")
 
-    # CoinGecko returns: { "bitcoin": { "usd": 60000, "usd_24h_change": 2.3, ... }, ... }
-    # pd.DataFrame(data) → columns = coin names, rows = price keys
-    # .T (transpose) → rows = coin names, columns = price keys  ← what we want
-    df = pd.DataFrame(data)
-    flipped_df = df.T
-
-    # ── Table: show only raw price columns (hide change% and timestamp cols) ──
-    price_cols_only = [
-        col for col in flipped_df.columns
-        if not col.endswith("_24h_change") and not col.endswith("last_updated_at")
-    ]
-
-    st.write("### Current Prices Table")
-    st.dataframe(flipped_df[price_cols_only])
-
-    # ── Currency selector for the metrics + bar chart below ──
-    currency_list = [c.strip().lower() for c in currencies.split(",")]
-    selected_currency = st.selectbox("Select currency to visualize:", currency_list)
-
-    price_col = selected_currency
-    change_col = selected_currency + "_24h_change"
-
-    # Guard: if change column missing (e.g. API hiccup), add empty column
-    if change_col not in flipped_df.columns:
-        flipped_df[change_col] = pd.NA
-
-    if price_col in flipped_df.columns:
-        # Make a clean working copy with just the two columns we need
-        clean_df = flipped_df[[price_col, change_col]].copy()
-        clean_df[price_col] = pd.to_numeric(clean_df[price_col], errors="coerce")
-        clean_df[change_col] = pd.to_numeric(clean_df[change_col], errors="coerce")
-
-        clean_df = clean_df.rename(columns={
-            price_col: "Price",
-            change_col: "24hr change"
-        })
-
-        # ── Colour-code the 24hr change column as HTML ──
-        # FIX: Use .loc[] instead of .iloc[] to avoid SettingWithCopyWarning.
-        # REMINDER: Never chain iloc[i] on a copy — pandas can't track it back
-        #           to the original df, so the assignment silently fails sometimes.
-        for coin_name in clean_df.index:
-            value = clean_df.loc[coin_name, "24hr change"]
-            if pd.notna(value):
-                rounded = round(float(value), 2)
-                if rounded >= 0:
-                    clean_df.loc[coin_name, "24hr change"] = (
-                        f"<span style='color:green;font-weight:bold'>+{rounded}%</span>"
-                    )
-                else:
-                    clean_df.loc[coin_name, "24hr change"] = (
-                        f"<span style='color:red;font-weight:bold'>{rounded}%</span>"
-                    )
-            else:
-                clean_df.loc[coin_name, "24hr change"] = "N/A"
-
-        st.write("### Change Metrics")
-        clean_df = clean_df.reset_index().rename(columns={"index": "coin"})
-        # unsafe_allow_html=True needed to render the <span> colour tags
-        st.markdown(clean_df.to_html(escape=False, index=False), unsafe_allow_html=True)
-
-    else:
-        st.warning("Selected currency not found in data.")
-
-    # ─────────────────────────────────────────────
-    # SPARKLINE CHARTS — 7-Day Trend Lines
-    # REMINDER: One chart per coin, displayed side-by-side using st.columns()
-    # ─────────────────────────────────────────────
-    st.write("### 📈 7-Day Price Trends (USD)")
-
+if spark_err:
+    st.warning(f"Sparkline data unavailable ({spark_err}) — showing prices only.")
+else:
     coin_list = [c.strip().lower() for c in coins.split(",")]
     cols = st.columns(len(coin_list))
-
     for idx, coin in enumerate(coin_list):
         if coin in sparkline_data:
             with cols[idx]:
@@ -181,17 +199,10 @@ if response.status_code == 200:
                 spark_df = pd.DataFrame(sparkline_data[coin], columns=["Price"])
                 st.line_chart(spark_df, height=180, use_container_width=True)
 
-    # ── Bar chart: current price comparison across coins ──
-    if price_col in flipped_df.columns:
-        st.write("### Current Price Comparison")
-        # REMINDER: bar_chart needs a Series or single-column DataFrame.
-        # flipped_df[price_col] gives a Series with coin names as index — perfect.
-        bar_data = pd.to_numeric(flipped_df[price_col], errors="coerce")
-        st.bar_chart(bar_data)
-    else:
-        st.warning("Selected currency not found in data.")
-
-else:
-    # Show the HTTP error code so you know what went wrong
-    # 429 = rate limited | 400 = bad coin ID | 500 = CoinGecko server issue
-    st.error(f"API Error {response.status_code} — check coin IDs or try again later.")
+# ─────────────────────────────────────────────
+# BAR CHART
+# ─────────────────────────────────────────────
+if price_col in df.columns:
+    st.write("### Current Price Comparison")
+    bar_data = pd.to_numeric(df[price_col], errors="coerce")
+    st.bar_chart(bar_data)
