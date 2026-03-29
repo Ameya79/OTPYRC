@@ -1,25 +1,10 @@
 """
-OTPYRC - Live Crypto Price Tracker
-====================================
-Uses the FREE CoinGecko API (no API key needed).
-
-FIX FOR 429 (Rate Limit):
-    - API responses are now CACHED for 60 seconds using @st.cache_data
-    - This means Streamlit won't call CoinGecko again on every dropdown click/rerun
-    - Only a manual "Refresh" or waiting 60s triggers a new API call
-    - Added retry logic with exponential backoff as a safety net
-
-HOW TO RUN:
-    pip install streamlit requests pandas
-    streamlit run app.py
-
 REMINDERS:
-    - CoinGecko free tier = ~10-30 calls/min. Cache TTL (60s) keeps you safe.
-    - Coin IDs must be CoinGecko slugs: "bitcoin", "ethereum", NOT "BTC"
-      -> Valid IDs: https://api.coingecko.com/api/v3/coins/list
-    - Sparkline is always in USD on the free tier (CoinGecko limitation)
-    - If you STILL get 429s, increase CACHE_TTL_SECONDS to 120 or 180
-    - If you have a CoinGecko API key, add it as: headers={"x-cg-demo-api-key": "YOUR_KEY"}
+    - Demo key limit: 30 calls/min — the 60s cache keeps you well under this
+    - Coin IDs are CoinGecko slugs: "bitcoin", "ethereum", NOT "BTC"
+      -> Find valid IDs: https://api.coingecko.com/api/v3/coins/list
+    - Sparklines are always USD (CoinGecko free tier limitation)
+    - If cache needs clearing, click Refresh in sidebar
 """
 
 import time
@@ -27,25 +12,64 @@ import streamlit as st
 import requests
 import pandas as pd
 
-# ─────────────────────────────────────────────
-# CONFIG — tweak these if you keep hitting 429
-# ─────────────────────────────────────────────
-CACHE_TTL_SECONDS = 60   # How long to reuse cached data before calling API again
-MAX_RETRIES = 3           # How many times to retry on 429 before giving up
-RETRY_DELAY = 5           # Seconds to wait between retries
+#optional hardcode
+API_KEY = ""   # e.g. "CG-abc123..." — leave "" to use sidebar input instead
+
+
+CACHE_TTL_SECONDS = 60
+MAX_RETRIES = 2
+RETRY_DELAY = 4
 
 # ─────────────────────────────────────────────
-# CACHED API FUNCTIONS
-# @st.cache_data(ttl=60) means:
-#   - First call -> hits the API, stores result
-#   - Next calls within 60s -> returns stored result, NO new API call
-#   - After 60s -> fetches fresh data again
-# This is the main fix for 429 errors.
+# UI — SIDEBAR
+# ─────────────────────────────────────────────
+st.title("OTPYRC")
+st.markdown("Live crypto prices via the CoinGecko API.")
+
+st.sidebar.header("🔧 Controls")
+
+# API key input — only shown if not hardcoded above
+if not API_KEY:
+    api_key_input = st.sidebar.text_input(
+        "🔑 CoinGecko API Key",
+        type="password",
+        placeholder="CG-xxxxxxxxxxxxxxxxxxxx",
+        help="Free key at coingecko.com/en/api — required on Streamlit Cloud to avoid 429 errors"
+    )
+else:
+    api_key_input = API_KEY
+
+# Show warning if no key provided
+if not api_key_input:
+    st.sidebar.warning(
+        "⚠️ No API key — you'll likely get 429 errors on Streamlit Cloud.\n\n"
+        "Get a free key at [coingecko.com/en/api](https://www.coingecko.com/en/api)"
+    )
+
+coins = st.sidebar.text_input(
+    "Coin IDs (comma separated):",
+    value="bitcoin,ethereum,dogecoin"
+)
+currencies = st.sidebar.text_input(
+    "Currencies (comma separated):",
+    value="usd,inr,eur"
+)
+
+st.sidebar.markdown("---")
+
+if st.sidebar.button("🔄 Refresh Data"):
+    st.cache_data.clear()
+    st.rerun()
+
+st.sidebar.info(f"💡 Data cached for {CACHE_TTL_SECONDS}s to stay under rate limits.")
+
+# ─────────────────────────────────────────────
+# CACHED API CALLS
+# Cache key includes the api_key so different keys get their own cache
 # ─────────────────────────────────────────────
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Fetching live prices...")
-def fetch_prices(coins: str, currencies: str):
-    """Fetch current prices + 24hr change from CoinGecko /simple/price"""
+def fetch_prices(coins: str, currencies: str, api_key: str):
     url = "https://api.coingecko.com/api/v3/simple/price"
     params = {
         "ids": coins,
@@ -53,13 +77,16 @@ def fetch_prices(coins: str, currencies: str):
         "include_24hr_change": "true",
         "include_last_updated_at": "true"
     }
+    # Demo key goes in the header, NOT as a query param
+    headers = {"x-cg-demo-api-key": api_key} if api_key else {}
+
     for attempt in range(MAX_RETRIES):
-        resp = requests.get(url, params=params)
+        resp = requests.get(url, params=params, headers=headers)
         if resp.status_code == 200:
             return resp.json(), None
         elif resp.status_code == 429:
             if attempt < MAX_RETRIES - 1:
-                time.sleep(RETRY_DELAY * (attempt + 1))  # wait 5s, 10s, 15s...
+                time.sleep(RETRY_DELAY * (attempt + 1))
             else:
                 return None, 429
         else:
@@ -68,16 +95,13 @@ def fetch_prices(coins: str, currencies: str):
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Fetching 7-day trends...")
-def fetch_sparklines(coins: str):
-    """Fetch 7-day sparkline price arrays from CoinGecko /coins/markets"""
+def fetch_sparklines(coins: str, api_key: str):
     url = "https://api.coingecko.com/api/v3/coins/markets"
-    params = {
-        "vs_currency": "usd",
-        "ids": coins,
-        "sparkline": "true"
-    }
+    params = {"vs_currency": "usd", "ids": coins, "sparkline": "true"}
+    headers = {"x-cg-demo-api-key": api_key} if api_key else {}
+
     for attempt in range(MAX_RETRIES):
-        resp = requests.get(url, params=params)
+        resp = requests.get(url, params=params, headers=headers)
         if resp.status_code == 200:
             result = {}
             for coin_data in resp.json():
@@ -94,52 +118,31 @@ def fetch_sparklines(coins: str):
 
 
 # ─────────────────────────────────────────────
-# UI
+# FETCH
 # ─────────────────────────────────────────────
-st.title("OTPYRC")
-st.markdown("OTPYRC fetches live crypto prices using the CoinGecko API.")
+price_data, price_err = fetch_prices(coins, currencies, api_key_input)
+sparkline_data, spark_err = fetch_sparklines(coins, api_key_input)
 
-st.sidebar.header("🔧 Controls")
-coins = st.sidebar.text_input(
-    "Enter Coin IDs (comma separated):",
-    value="bitcoin,ethereum,dogecoin"
-)
-currencies = st.sidebar.text_input(
-    "Enter Currencies (comma separated):",
-    value="usd,inr,eur"
-)
-
-st.sidebar.markdown("---")
-
-# Refresh button: clears the cache so next run fetches fresh data
-if st.sidebar.button("🔄 Refresh Data"):
-    st.cache_data.clear()  # wipe cached responses so API is called again
-    st.rerun()
-
-st.sidebar.info(f"💡 Data auto-refreshes every {CACHE_TTL_SECONDS}s to avoid rate limits.")
-
-# ─────────────────────────────────────────────
-# FETCH DATA
-# ─────────────────────────────────────────────
-price_data, price_err = fetch_prices(coins, currencies)
-sparkline_data, spark_err = fetch_sparklines(coins)
-
-# Friendly error messages for each HTTP error code
 ERROR_MESSAGES = {
-    429: "⛔ Rate limited by CoinGecko (429). Wait ~60 seconds and click Refresh.",
-    400: "❌ Bad request (400) — check your coin IDs are valid CoinGecko slugs.",
-    500: "🔥 CoinGecko server error (500) — their end, not yours. Try again later.",
+    429: (
+        "⛔ **Rate limited (429).**\n\n"
+        "On Streamlit Cloud this usually means the shared IP is blocked.\n\n"
+        "**Fix:** Paste your free CoinGecko API key in the sidebar.\n"
+        "Get one at → https://www.coingecko.com/en/api"
+    ),
+    400: "❌ Bad request (400) — check coin IDs are valid CoinGecko slugs (e.g. `bitcoin`, not `BTC`).",
+    500: "🔥 CoinGecko server error (500) — their problem, not yours. Try again in a minute.",
 }
 
 if price_err:
     msg = ERROR_MESSAGES.get(price_err, f"API Error {price_err} — try again later.")
     st.error(msg)
-    st.stop()  # halt the rest of the script, nothing to show
+    st.stop()
 
 # ─────────────────────────────────────────────
-# PROCESS PRICES
+# PRICES TABLE
 # ─────────────────────────────────────────────
-df = pd.DataFrame(price_data).T   # transpose: rows=coins, cols=price keys
+df = pd.DataFrame(price_data).T
 
 price_cols_only = [
     col for col in df.columns
@@ -183,7 +186,7 @@ else:
     st.warning("Selected currency not found in data.")
 
 # ─────────────────────────────────────────────
-# SPARKLINE CHARTS
+# SPARKLINES
 # ─────────────────────────────────────────────
 st.write("### 📈 7-Day Price Trends (USD)")
 
