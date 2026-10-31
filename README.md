@@ -1,89 +1,135 @@
-💰 OTPYRC: Live Cryptocurrency Price Tracker
+# 🪙 OTPYRC: Live Cryptocurrency Price Tracker
 
-OTPYRC (Crypto spelled backward) is a simple, fast, and real-time dashboard built with Streamlit that uses the CoinGecko API to fetch and visualize live cryptocurrency prices, daily changes, and 7-day trends.
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.35%2B-FF4B4B.svg?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
+[![Tests](https://img.shields.io/badge/pytest-passing-success.svg?logo=pytest&logoColor=white)](https://pytest.org/)
+[![CoinGecko API](https://img.shields.io/badge/CoinGecko-v3-8DC63F.svg?logo=coingecko&logoColor=white)](https://www.coingecko.com/en/api)
+[![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 
-It's designed to give you a quick, clean overview of your selected digital assets.
+**OTPYRC** (*Crypto* spelled backward) is a modern, real-time cryptocurrency market monitoring application built with **Streamlit** and the **CoinGecko API**. It enables investors and developers to inspect live spot prices, percentage changes, 7-day sparkline charts, and relative portfolio comparisons with built-in caching, exponential backoff, and containerization.
 
-✨ Features
+---
 
-Real-Time Data: Fetches up-to-the-minute prices using the CoinGecko API.
+## ✨ Features
 
-Customizable Tracking: Easily select which Coins (e.g., bitcoin, ethereum) and Currencies (e.g., usd, eur) you want to monitor using the sidebar controls.
+- ⚡ **Live Snapshot Metric Cards**: High-level overview displaying current prices and color-coded 24-hour delta percentages.
+- 📑 **Organized Multi-Tab Interface**:
+  - 📊 **Market Overview**: Tabular view of prices and customizable focus currency metrics.
+  - 📈 **7-Day Sparkline Trends**: Interactive trend lines in USD with min/max range indicators.
+  - ⚖️ **Asset Comparison**: Comparative bar charts for cross-currency price evaluation.
+  - ℹ️ **API & Rate Limits**: Diagnostics panel showing endpoint status, cache TTL, and active keys.
+- 🛡️ **Rate-Limit Resilience**:
+  - Streamlit caching (`ttl=60s`) keeps requests well within CoinGecko's 30 calls/min limit.
+  - Exponential backoff retry strategy for handling HTTP 429 rate limit responses.
+  - Headless API key ingestion via environment variables (`COINGECKO_API_KEY`) and sidebar controls.
+- 🧹 **Robust Input Parsing**: Handles trailing commas, mixed casing, and extraneous whitespace gracefully.
+- 🐳 **Production Docker & Docker Compose**: Single-command startup with built-in healthchecks.
+- 🧪 **Automated Pytest Coverage**: Unit tests verifying token parsing, error handling, and API integration.
 
-7-Day Trends: Includes sparkline charts for each coin, showing its price movement over the last week.
+---
 
-24-Hour Metrics: Displays the percentage change in price over the last 24 hours, color-coded for quick visual analysis (Green for up, Red for down).
+## 🚀 Quickstart
 
-Interactive Charts: Includes bar charts for easy comparison of current prices across selected coins.
+### Option 1: Run with Docker Compose (Recommended)
 
-🛠️ Installation and Setup
+Make sure you have [Docker](https://docs.docker.com/get-docker/) installed:
 
-To run OTPYRC locally, you need Python installed on your system.
+```bash
+# Clone the repository
+git clone https://github.com/Ameya79/OTPYRC.git
+cd OTPYRC
 
-1. Clone the repository (Simulated Step)
+# Launch with Docker Compose
+docker compose up -d
+```
 
-Since this is a single file, you would typically save the provided Python code as a file named otpyrc_app.py.
+Navigate to:
+👉 **[http://localhost:8501](http://localhost:8501)**
 
-2. Install Dependencies
+To stop the container:
+```bash
+docker compose down
+```
 
-You only need two main libraries: streamlit and pandas. The requests library is usually included with Python environments.
+---
 
-pip install streamlit pandas
+### Option 2: Run Locally with Python
 
+**Prerequisites:** Python 3.10+ and `pip`
 
-3. Run the App
+```bash
+# 1. Clone the repository
+git clone https://github.com/Ameya79/OTPYRC.git
+cd OTPYRC
 
-Execute the Streamlit app from your terminal:
+# 2. (Optional) Create virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-streamlit run otpyrc_app.py
+# 3. Install dependencies
+pip install -r requirements.txt
 
+# 4. Start the Streamlit application
+streamlit run app.py
+```
 
-The application will automatically open in your web browser, usually at http://localhost:8501.
+The application will launch in your default web browser at `http://localhost:8501`.
 
-🚀 How to Use
+---
 
-All the core settings for the tracker are located in the Controls section of the sidebar on the left.
+## ⚙️ Configuration & Environment Variables
 
-1. Configure Coins and Currencies
+Create a `.env` file from `.env.example`:
 
-In the sidebar, you will see two input fields:
+```bash
+cp .env.example .env
+```
 
-Control Field
+| Variable | Description | Default |
+|---|---|---|
+| `COINGECKO_API_KEY` | Optional Demo or Pro API Key from CoinGecko | *(None / Public)* |
+| `STREAMLIT_SERVER_PORT` | Port for the Streamlit web server | `8501` |
+| `STREAMLIT_SERVER_HEADLESS` | Run in non-interactive headless mode | `true` |
 
-Description
+> [!TIP]
+> A free demo key (30 calls/minute) can be generated at [coingecko.com/en/api](https://www.coingecko.com/en/api). Providing this key prevents 429 rate limit blocks on shared IP addresses.
 
-Default Value
+---
 
-Enter Coin IDs
+## 🧪 Running Tests
 
-The official CoinGecko ID for the cryptocurrency. Separate multiple coins with a comma.
+Execute the automated test suite using `pytest`:
 
-bitcoin,ethereum,dogecoin
+```bash
+pytest tests/ -v
+```
 
-Enter Currencies
+Tests cover:
+- Token normalization & whitespace stripping
+- Deduplication of input coin IDs
+- Rate limit handling (HTTP 429 backoff)
+- Successful price parsing and sparkline mapping
 
-The fiat currency codes (or other crypto codes) for comparison. Separate multiple currencies with a comma.
+---
 
-usd,inr,eur
+## 📂 Project Structure
 
-Example: To track Cardano, Polygon, and Solana against the Japanese Yen and British Pound, you would enter:
+```
+OTPYRC/
+├── app.py                  # Core Streamlit application & API connectors
+├── requirements.txt        # Python library dependencies
+├── Dockerfile              # Production container build
+├── docker-compose.yml      # Service orchestration & healthcheck
+├── .dockerignore           # Container build ignore rules
+├── .env.example            # Environment variables template
+├── README.md               # Standardized documentation
+└── tests/
+    └── test_otpyrc.py      # Automated Pytest test suite
+```
 
-Coin IDs: cardano,matic-network,solana
+---
 
-Currencies: jpy,gbp
+## 📜 License
 
-2. Refresh Data
-
-The CoinGecko API is very fast, but if you want to force an immediate update of all prices, just click the 🔄 Refresh Data button in the sidebar.
-
-3. Analyze the Visualizations
-
-Current Prices Table: Shows the raw data, including price, 24-hour change, and the last update timestamp for every coin and currency combination you selected.
-
-Select currency to visualize: Use the dropdown menu to select one currency (e.g., usd) to focus the charts and change metrics on.
-
-Change Metrics: A table that clearly shows the current price and the color-coded 24hr change percentage.
-
-📈 7-Day Price Trends: A row of clean line charts (sparklines) showing the price movement over the past seven days for each selected coin.
-
-Current Price Comparison: A simple bar chart comparing the latest price of your selected coins against the primary currency you chose in the selector.
+Licensed under the [MIT License](LICENSE).
